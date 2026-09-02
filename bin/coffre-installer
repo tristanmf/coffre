@@ -72,8 +72,12 @@ case "$reponse" in
   *)                 printf 'réponse inattendue.\n'; echo "$reponse" >&2; exit 1 ;;
 esac
 
+# On garde un éventuel dossier de copies locales choisi auparavant.
+local_avant=""
+[ -f "$CONFIG" ] && local_avant="$(sed -n 's/^COFFRE_LOCAL="\(.*\)"$/\1/p' "$CONFIG" | head -1)"
 mkdir -p "$(dirname "$CONFIG")"
 printf 'COFFRE_URL="%s"\nCOFFRE_DISTANT="%s"\n' "$adresse" "$distant" > "$CONFIG"
+[ -n "$local_avant" ] && printf 'COFFRE_LOCAL="%s"\n' "$local_avant" >> "$CONFIG"
 chmod 600 "$CONFIG"
 security add-generic-password -U -s coffre -a api -w "$mdp" 2>/dev/null
 unset mdp
