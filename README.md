@@ -1,3 +1,5 @@
+<p align="center"><img src="demo/logo.png" width="120" alt=""></p>
+
 # Le coffre
 
 ![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777BB4?logo=php&logoColor=white)
@@ -12,6 +14,10 @@ Deux outils sur un même socle, à poser sur n'importe quel hébergement PHP, m�
 - **un conservatoire de preuves** — des captures de pages web datées, empreintées et chaînées. Chaque pièce (image, PDF, code source, en-têtes) porte son empreinte SHA-256, et chaque dépôt est chaîné au précédent : retoucher une capture ancienne casserait toutes les suivantes, ce qui se voit immédiatement.
 
 Créé par **[Tristan Mendès France](https://tristan.pro)**, qui travaille sur la désinformation et avait besoin des deux : envoyer des rushes lourds à des confrères, et garder des traces de pages qui disparaissent. **Point important : je ne suis pas développeur.** Je n'ai pas écrit ce code à la main : je l'ai décrit à une IA ([Claude Code](https://claude.com/claude-code)), qui l'a écrit, testé et corrigé au fil de mes retours. Ce dépôt est autant un outil qu'une démonstration : on peut se fabriquer ce qui manque en le racontant.
+
+<p align="center"><img src="demo/capture.jpg" width="720" alt="La page d'administration du coffre : dépôt par glisser-déposer, durée de vie, lien"></p>
+
+*La page d'administration : on glisse un fichier ou un dossier, on choisit la durée de vie, le lien apparaît.*
 
 ## Ce que ça fait
 
