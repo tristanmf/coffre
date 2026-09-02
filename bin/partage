@@ -1,0 +1,151 @@
+#!/bin/bash
+# partage — envoie un ou plusieurs fichiers, ou un dossier entier, sur le coffre,
+# et affiche le lien à coller dans WhatsApp ou dans un mail.
+#
+#   partage rushes.mp4
+#   partage rushes.mp4 -j 30 -n "montage LCI"
+#   partage ~/Movies/Tunisie/            (le dossier entier)
+#   partage clip1.mp4 clip2.mp4 notes.pdf
+#
+# Passe par le SFTP : pas de limite de taille, et un transfert interrompu se reprend.
+# Un dossier est envoyé tel quel, sans zip : le destinataire voit la liste et
+# prend ce qu'il veut. (Pour un seul fichier à télécharger d'un coup, fais le zip
+# toi-même et envoie le .zip.)
+
+set -euo pipefail
+
+CONFIG="${HOME}/.config/coffre/config"
+[ -f "$CONFIG" ] || { echo "Configuration absente. Lance d'abord coffre-preparer." >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$CONFIG"
+: "${COFFRE_URL:?COFFRE_URL manquant}" "${COFFRE_DISTANT:?COFFRE_DISTANT manquant}"
+
+NAVIGATEUR='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+jours=7
+note=""
+cibles=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -j|--jours) jours="${2:?}"; shift 2 ;;
+    -n|--note)  note="${2:?}"; shift 2 ;;
+    -h|--help)  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)          cibles+=("$1"); shift ;;
+  esac
+done
+
+[ "${#cibles[@]}" -gt 0 ] || { echo "usage : partage FICHIER|DOSSIER… [-j JOURS] [-n NOTE]" >&2; exit 1; }
+for c in "${cibles[@]}"; do
+  [ -e "$c" ] || { echo "Introuvable : $c" >&2; exit 1; }
+done
+
+cle="$(security find-generic-password -s coffre -a api -w 2>/dev/null)" \
+  || { echo "Clé du coffre absente du trousseau. Relance coffre-preparer." >&2; exit 1; }
+
+# Même nettoyage de nom que côté serveur, pour que les deux se retrouvent.
+nettoyer() {
+  local n
+  n="$(basename "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._]*//; s/[._]*$//' | cut -c1-120)"
+  [ -n "$n" ] || n="fichier"
+  case "$n" in *.php|*.php[0-9]|*.phtml|*.phar|*.cgi|*.pl|*.py) n="${n}.txt" ;; esac
+  printf '%s' "$n"
+}
+
+# Ce que le serveur comptera : mêmes exclusions des deux côtés.
+compter() {
+  find "$@" -type f ! -name '.DS_Store' ! -name '.htaccess' -exec stat -f%z {} + 2>/dev/null \
+    | awk '{n++; t+=$1} END {printf "%d %d", n+0, t+0}'
+}
+
+lisible() {
+  awk -v o="$1" 'BEGIN {
+    split("o Ko Mo Go To", u, " "); i = 1
+    while (o >= 1024 && i < 5) { o /= 1024; i++ }
+    printf (i == 1 ? "%d %s" : "%.1f %s"), o, u[i]
+  }'
+}
+
+jeton="$(openssl rand -base64 18 | tr '+/' '-_' | tr -d '=')"
+distant="${COFFRE_DISTANT}/f/${jeton}"
+
+# ------------------------------------------------------- un seul fichier seul
+
+if [ "${#cibles[@]}" -eq 1 ] && [ -f "${cibles[0]}" ]; then
+  fichier="${cibles[0]}"
+  nom="$(nettoyer "$fichier")"
+  taille="$(stat -f%z "$fichier")"
+
+  printf 'Empreinte du fichier… '
+  sha="$(shasum -a 256 "$fichier" | awk '{print $1}')"
+  printf 'faite.\n'
+
+  printf 'Envoi de %s (%s)…\n' "$nom" "$(lisible "$taille")"
+  ovhftp raw "mkdir -f -p \"${distant}\"; put \"${fichier}\" -o \"${distant}/${nom}\""
+
+  corps="$(CLE="$cle" JETON="$jeton" NOM="$nom" SHA="$sha" JOURS="$jours" NOTE="$note" python3 -c '
+import json, os
+print(json.dumps({"cle": os.environ["CLE"], "quoi": "partage", "type": "fichier",
+                  "jeton": os.environ["JETON"], "nom": os.environ["NOM"],
+                  "sha256": os.environ["SHA"], "jours": int(os.environ["JOURS"]),
+                  "note": os.environ["NOTE"]}))')"
+
+# ------------------------------------------- un dossier, ou plusieurs cibles
+
+else
+  if [ "${#cibles[@]}" -eq 1 ]; then
+    nom="$(basename "${cibles[0]}")"
+  else
+    nom="${#cibles[@]} fichiers"
+  fi
+
+  read -r nombre taille <<< "$(compter "${cibles[@]}")"
+  [ "$nombre" -gt 0 ] || { echo "Rien à envoyer (dossier vide ?)." >&2; exit 1; }
+
+  printf 'Envoi de %s fichiers (%s)…\n' "$nombre" "$(lisible "$taille")"
+  ovhftp raw "mkdir -f -p \"${distant}\""
+
+  for c in "${cibles[@]}"; do
+    if [ -d "$c" ]; then
+      if [ "${#cibles[@]}" -eq 1 ]; then
+        sous="${distant}"
+      else
+        sous="${distant}/$(nettoyer "$c")"
+      fi
+      printf '  · %s\n' "$(basename "$c")"
+      ovhftp raw "mirror -R --parallel=3 -X .DS_Store -X .htaccess \"${c%/}\" \"${sous}\"" >/dev/null
+    else
+      printf '  · %s\n' "$(basename "$c")"
+      ovhftp raw "put \"${c}\" -o \"${distant}/$(nettoyer "$c")\""
+    fi
+  done
+
+  corps="$(CLE="$cle" JETON="$jeton" NOM="$nom" NOMBRE="$nombre" TAILLE="$taille" JOURS="$jours" NOTE="$note" python3 -c '
+import json, os
+print(json.dumps({"cle": os.environ["CLE"], "quoi": "partage", "type": "groupe",
+                  "jeton": os.environ["JETON"], "nom": os.environ["NOM"],
+                  "nombre": int(os.environ["NOMBRE"]), "taille": int(os.environ["TAILLE"]),
+                  "jours": int(os.environ["JOURS"]), "note": os.environ["NOTE"]}))')"
+fi
+
+# ------------------------------------------------- inscription au catalogue
+
+# Les trois règles du pare-feu OVH : un vrai User-Agent, du JSON, un corps non vide.
+reponse="$(printf '%s' "$corps" | curl -sS -X POST "${COFFRE_URL}/api.php" \
+  -H 'Content-Type: application/json' -H 'Expect:' -A "$NAVIGATEUR" --data-binary @-)"
+unset cle corps
+
+lien="$(REP="$reponse" python3 -c '
+import json, os, sys
+try:
+    d = json.loads(os.environ["REP"])
+except Exception:
+    sys.stderr.write("Réponse illisible du serveur.\n"); sys.exit(1)
+if "lien" in d:
+    print(d["lien"])
+else:
+    sys.stderr.write("Le serveur a refusé : " + str(d.get("erreur", d)) + "\n"); sys.exit(1)
+')" || { echo "Les fichiers sont sur le serveur mais ne sont pas inscrits au catalogue." >&2; exit 1; }
+
+printf '\n%s\n' "$lien"
+printf '%s\n' "$lien" | pbcopy 2>/dev/null && printf '(copié dans le presse-papier, valable %s jours)\n' "$jours"

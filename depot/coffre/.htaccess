@@ -1,0 +1,10 @@
+# Le coffre proprement dit : rien de ce dossier n'est servi par Apache.
+# Les captures ne sortent que par v.php, après ouverture de session.
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Deny from all
+</IfModule>
+Options -Indexes

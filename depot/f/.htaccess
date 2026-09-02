@@ -1,0 +1,28 @@
+# Les fichiers partagés. Apache les sert directement : c'est ce qui permet
+# les gros fichiers et la reprise d'un téléchargement interrompu.
+# Les adresses sont imprévisibles (jeton de 24 caractères tirés au hasard).
+Options -Indexes
+
+# Ceinture et bretelles : rien d'exécutable ici, quoi qu'il arrive.
+<FilesMatch "\.(php\d?|phtml|phar|cgi|pl|py|shtml)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+<IfModule mod_headers.c>
+  Header set X-Robots-Tag "noindex, nofollow"
+</IfModule>
+
+# Une page HTML ou un SVG partagé s'ouvrirait dans le navigateur, sur le domaine
+# du site, avec ses cookies : on force le téléchargement pour ces types-là.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html?|xhtml|svg|xml|mht|mhtml)$">
+    Header set Content-Disposition "attachment"
+    Header set X-Content-Type-Options "nosniff"
+  </FilesMatch>
+</IfModule>

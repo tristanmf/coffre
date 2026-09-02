@@ -1,0 +1,26 @@
+# Le coffre. Ce fichier ne concerne que /depot/ et ne touche à rien de WordPress.
+# Pas de php_value ni de php_flag ici : sous PHP-FPM (le cas chez OVH) ils provoquent une erreur 500.
+
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /depot/
+  # Lien court envoyé aux destinataires : /depot/d/JETON
+  RewriteRule ^d/([A-Za-z0-9_-]+)/?$ d.php?j=$1 [L,QSA]
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header set X-Robots-Tag "noindex, nofollow"
+</IfModule>
+
+# Le catalogue ne se lit pas depuis le web.
+<FilesMatch "\.(json|log|tmp)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>

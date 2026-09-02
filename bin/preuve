@@ -1,0 +1,198 @@
+#!/bin/bash
+# preuve — capture une page web et la dépose au conservatoire, datée et empreintée.
+#
+#   preuve https://exemple.fr/le-post
+#   preuve https://exemple.fr/le-post -n "narratif repris par X le 19/08" -a 25
+#   preuve https://x.com/qqun/status/123 --depuis ~/capture   (capture faite autrement)
+#
+# Garde quatre pièces : capture d'écran, PDF de la page entière, code HTML,
+# en-têtes du serveur. Chacune est empreintée (SHA-256), et l'ensemble est
+# chaîné au dépôt précédent : on ne peut pas retoucher une pièce ancienne
+# sans casser toutes les suivantes.
+
+set -euo pipefail
+
+CONFIG="${HOME}/.config/coffre/config"
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+LOCAL_DEFAUT="${HOME}/.local/share/coffre"
+NAVIGATEUR='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+[ -f "$CONFIG" ] || { echo "Configuration absente. Lance d'abord coffre-preparer." >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$CONFIG"
+LOCAL="${COFFRE_LOCAL:-$LOCAL_DEFAUT}"
+[ -x "$CHROME" ] || { echo "Google Chrome introuvable." >&2; exit 1; }
+
+note=""
+attente=12
+url=""
+depuis=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n|--note)    note="${2:?}"; shift 2 ;;
+    -a|--attente) attente="${2:?}"; shift 2 ;;
+    -d|--depuis)  depuis="${2:?}"; shift 2 ;;
+    -h|--help)    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)            url="$1"; shift ;;
+  esac
+done
+[ -n "$url" ] || { echo "usage : preuve URL [-n NOTE] [-a SECONDES]" >&2; exit 1; }
+
+cle="$(security find-generic-password -s coffre -a api -w 2>/dev/null)" \
+  || { echo "Clé du coffre absente du trousseau. Relance coffre-preparer." >&2; exit 1; }
+
+id="$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"
+dossier="${LOCAL}/${id}"
+mkdir -p "$dossier"
+profil="$(mktemp -d)"
+trap 'rm -rf "$profil"' EXIT
+
+# Chrome en mode sans interface ne rend pas toujours la main une fois son travail
+# fait : il faut le surveiller et le couper. On s'arrête dès que le fichier
+# attendu a fini de grossir, ou au bout de la limite.
+chrome_limite() {
+  local attendu="$1" limite="$2"; shift 2
+  "$CHROME" "$@" >/dev/null 2>&1 &
+  local pid=$! n=0 taille=-1 precedente=-2
+  while kill -0 "$pid" 2>/dev/null && [ "$n" -lt "$limite" ]; do
+    sleep 1; n=$((n + 1))
+    precedente=$taille
+    taille=$(stat -f%z "$attendu" 2>/dev/null || echo -1)
+    if [ "$taille" -gt 0 ] && [ "$taille" = "$precedente" ]; then break; fi
+  done
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 1
+  kill -KILL "$pid" 2>/dev/null || true
+  pkill -9 -f "$profil" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  [ -s "$attendu" ]
+}
+
+# Les pages derrière une connexion ne sont pas capturables ainsi : Chrome tourne
+# dans un profil vierge. Pour celles-là, on classe une capture faite autrement.
+if [ -n "$depuis" ]; then
+  [ -d "$depuis" ] || { echo "Dossier introuvable : $depuis" >&2; exit 1; }
+  printf 'Classement de %s\n' "$url"
+  cp -R "${depuis%/}/." "$dossier/"
+  find "$dossier" -name '.DS_Store' -delete 2>/dev/null || true
+  [ -n "$(ls -A "$dossier")" ] || { echo "Le dossier est vide." >&2; exit 1; }
+  printf '  · %s fichiers repris\n' "$(find "$dossier" -type f | wc -l | tr -d ' ')"
+else
+
+printf 'Capture de %s\n' "$url"
+
+printf '  · code source… '
+curl -sSL --max-time 60 -A "$NAVIGATEUR" -D "${dossier}/entetes.txt" -o "${dossier}/page.html" "$url" \
+  && printf 'fait\n' || printf 'échec (on continue)\n'
+
+printf '  · image de la page… '
+chrome_limite "${dossier}/capture.png" "$((attente + 20))" \
+  --headless=new --disable-gpu --hide-scrollbars --no-first-run \
+  --user-data-dir="$profil" --window-size=1280,2600 \
+  --virtual-time-budget="$((attente * 1000))" \
+  --screenshot="${dossier}/capture.png" "$url" \
+  && printf 'fait\n' || printf 'échec\n'
+
+printf '  · PDF de la page entière… '
+chrome_limite "${dossier}/page.pdf" "$((attente + 20))" \
+  --headless=new --disable-gpu --no-first-run \
+  --user-data-dir="$profil" --no-pdf-header-footer \
+  --virtual-time-budget="$((attente * 1000))" \
+  --print-to-pdf="${dossier}/page.pdf" "$url" \
+  && printf 'fait\n' || printf 'échec\n'
+
+[ -s "${dossier}/capture.png" ] || [ -s "${dossier}/page.pdf" ] || {
+  echo "Rien n'a pu être capturé — page inaccessible ou protégée. Dossier laissé dans ${dossier}" >&2
+  exit 1
+}
+
+# Ces plateformes n'affichent presque plus rien à un visiteur déconnecté.
+case "$url" in
+  *x.com/*|*twitter.com/*|*facebook.com/*|*instagram.com/*|*threads.net/*|*linkedin.com/*|*tiktok.com/*)
+    mur=1 ;;
+  *) mur=0 ;;
+esac
+if [ "$mur" = 0 ] && grep -qiE 'se connecter|connectez-vous|log ?in|sign ?in to' "${dossier}/page.html" 2>/dev/null \
+   && [ "$(stat -f%z "${dossier}/page.html" 2>/dev/null || echo 0)" -lt 40000 ]; then
+  mur=1
+fi
+if [ "$mur" = 1 ]; then
+  printf '\n  ⚠ Cette page exige sans doute une connexion. Ce qui est archivé est donc\n'
+  printf '    ce que voit un visiteur déconnecté. Pour la version complète, demande à\n'
+  printf '    Claude de la capturer avec ton Chrome.\n\n'
+fi
+
+fi
+
+titre="$(DOSSIER="$dossier" python3 -c '
+import os, re, html
+p = os.path.join(os.environ["DOSSIER"], "page.html")
+t = ""
+try:
+    s = open(p, "rb").read().decode("utf-8", "replace")
+    m = re.search(r"<title[^>]*>(.*?)</title>", s, re.S | re.I)
+    if m:
+        t = html.unescape(re.sub(r"\s+", " ", m.group(1))).strip()
+except OSError:
+    pass
+print(t[:200])
+')"
+
+# Fiche descriptive, écrite avec les pièces : elle voyage avec elles.
+meta="$(ID="$id" URL="$url" TITRE="$titre" NOTE="$note" DOSSIER="$dossier" \
+  MACHINE="$([ -n "$depuis" ] && echo "Chrome, session ouverte" || scutil --get ComputerName 2>/dev/null || hostname)" python3 -c '
+import hashlib, json, os, datetime
+d = os.environ["DOSSIER"]
+fichiers = []
+for nom in sorted(os.listdir(d)):
+    chemin = os.path.join(d, nom)
+    if not os.path.isfile(chemin) or nom == "fiche.json":
+        continue
+    h = hashlib.sha256()
+    with open(chemin, "rb") as f:
+        for bloc in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloc)
+    fichiers.append({"nom": nom, "taille": os.path.getsize(chemin), "sha256": h.hexdigest()})
+piece = {
+    "id": os.environ["ID"],
+    "url": os.environ["URL"],
+    "titre": os.environ["TITRE"],
+    "note": os.environ["NOTE"],
+    "date": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    "capture": "capture.png" if os.path.exists(os.path.join(d, "capture.png")) else "",
+    "capture_par": os.environ["MACHINE"],
+    "fichiers": fichiers,
+}
+open(os.path.join(d, "fiche.json"), "w", encoding="utf-8").write(
+    json.dumps(piece, ensure_ascii=False, indent=2))
+print(json.dumps(piece, ensure_ascii=False))
+')"
+
+printf '  · envoi au coffre… '
+ovhftp push "$dossier" "${COFFRE_DISTANT}/coffre/preuves/${id}" >/dev/null
+printf 'fait\n'
+
+corps="$(CLE="$cle" META="$meta" python3 -c '
+import json, os
+print(json.dumps({"cle": os.environ["CLE"], "quoi": "preuve",
+                  "piece": json.loads(os.environ["META"])}))')"
+
+reponse="$(printf '%s' "$corps" | curl -sS -X POST "${COFFRE_URL}/api.php" \
+  -H 'Content-Type: application/json' -H 'Expect:' -A "$NAVIGATEUR" --data-binary @-)"
+unset cle corps
+
+REP="$reponse" python3 -c '
+import json, os, sys
+try:
+    d = json.loads(os.environ["REP"])
+except Exception:
+    sys.stderr.write("Réponse illisible du serveur.\n"); sys.exit(1)
+if "fiche" in d:
+    print("\nPièce enregistrée.")
+    print("  fiche    " + d["fiche"])
+    print("  maillon  " + d["maillon"][:32] + "…")
+else:
+    sys.stderr.write("Le serveur a refusé : " + str(d.get("erreur", d)) + "\n"); sys.exit(1)
+'
+
+printf '  copie locale conservée dans %s\n' "$dossier"

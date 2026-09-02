@@ -1,0 +1,104 @@
+#!/bin/bash
+# coffre-installer — installe les commandes du coffre sur un autre Mac.
+#
+# À lancer sur toute machine d'où tu veux envoyer des fichiers et capturer des
+# pages. Le serveur, lui, est déjà en
+# place : il n'y a rien à y refaire.
+#
+# Aucun secret à transporter : on retape simplement le mot de passe du coffre.
+
+set -euo pipefail
+
+SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CIBLE="${HOME}/.local/bin"
+CONFIG="${HOME}/.config/coffre/config"
+ADRESSE_DEFAUT=""
+DISTANT_DEFAUT="www/depot"
+NAVIGATEUR='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+echo "Installation du coffre sur cette machine."
+echo
+
+# ------------------------------------------------------------- l'outillage
+
+manque=0
+verifier() {
+  if command -v "$1" >/dev/null 2>&1 || [ -x "$1" ]; then
+    printf '  ✓ %s\n' "$2"
+  else
+    printf '  ✗ %s — %s\n' "$2" "$3"
+    manque=1
+  fi
+}
+echo "Ce qu'il faut sur la machine :"
+verifier ovhftp "ovhftp"   "copie bin/ovhftp dans ~/.local/bin puis lance : ovhftp setup"
+verifier lftp   "lftp"     "brew install lftp"
+verifier python3 "python3" "xcode-select --install"
+verifier curl   "curl"     "fourni avec macOS"
+verifier "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" "Google Chrome" \
+         "nécessaire pour la commande preuve seulement"
+echo
+[ "$manque" -eq 0 ] || { echo "Complète ce qui manque, puis relance." >&2; exit 1; }
+
+# ---------------------------------------------------------- la configuration
+
+printf 'Adresse publique du coffre (ex. https://exemple.fr/depot) : '
+read -r adresse
+adresse="${adresse:-$ADRESSE_DEFAUT}"
+[ -n "$adresse" ] || { echo "Adresse vide, on arrête." >&2; exit 1; }
+adresse="${adresse%/}"
+
+printf 'Dossier distant, relatif à la racine SFTP [%s] : ' "$DISTANT_DEFAUT"
+read -r distant
+distant="${distant:-$DISTANT_DEFAUT}"
+
+printf 'Mot de passe du coffre (celui de la page) : '
+stty -echo; read -r mdp; stty echo; printf '\n'
+[ -n "$mdp" ] || { echo "Mot de passe vide, on arrête." >&2; exit 1; }
+
+# On vérifie auprès du serveur avant d'enregistrer quoi que ce soit.
+printf 'Vérification auprès du serveur… '
+corps="$(MDP="$mdp" python3 -c '
+import json, os
+print(json.dumps({"cle": os.environ["MDP"], "quoi": "verification"}))')"
+reponse="$(printf '%s' "$corps" | curl -sS -X POST "${adresse}/api.php" \
+  -H 'Content-Type: application/json' -H 'Expect:' -A "$NAVIGATEUR" --data-binary @- || true)"
+unset corps
+
+case "$reponse" in
+  *'clé refusée'*)   printf 'refusé.\n'; echo "Le mot de passe ne correspond pas à celui du coffre." >&2; exit 1 ;;
+  *'action inconnue'*) printf 'accepté.\n' ;;
+  *"trop d'essais"*) printf 'bloqué.\n'; echo "Trop d'essais récents. Réessaie dans un quart d'heure." >&2; exit 1 ;;
+  *)                 printf 'réponse inattendue.\n'; echo "$reponse" >&2; exit 1 ;;
+esac
+
+mkdir -p "$(dirname "$CONFIG")"
+printf 'COFFRE_URL="%s"\nCOFFRE_DISTANT="%s"\n' "$adresse" "$distant" > "$CONFIG"
+chmod 600 "$CONFIG"
+security add-generic-password -U -s coffre -a api -w "$mdp" 2>/dev/null
+unset mdp
+
+# ------------------------------------------------------------- les commandes
+
+mkdir -p "$CIBLE"
+for c in partage preuve coffre-preparer coffre-installer ovhftp; do
+  [ -f "${SOURCE}/${c}" ] || continue
+  cp "${SOURCE}/${c}" "${CIBLE}/${c}"
+  chmod +x "${CIBLE}/${c}"
+  printf '  installé : %s\n' "$c"
+done
+
+case ":$PATH:" in
+  *":${CIBLE}:"*) ;;
+  *) printf '\nAttention : %s n'"'"'est pas dans ton PATH.\n' "$CIBLE"
+     printf 'Ajoute cette ligne à ~/.zshrc :\n  export PATH="$HOME/.local/bin:$PATH"\n' ;;
+esac
+
+cat <<'FIN_MSG'
+
+C'est prêt. Essaie :
+
+  partage un-fichier.pdf
+  preuve https://exemple.fr/une-page
+
+FIN_MSG

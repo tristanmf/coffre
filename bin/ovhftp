@@ -1,0 +1,159 @@
+#!/bin/bash
+# ovhftp — accès SFTP à l'hébergement OVH depuis le terminal ou Claude Code.
+#
+# Le mot de passe n'est jamais écrit sur le disque : il est lu dans le
+# trousseau macOS, et passé à lftp par l'entrée standard (donc invisible
+# dans la liste des processus).
+#
+# Configuration : ~/.config/ovhftp/config
+# Installation du mot de passe : ./ovhftp setup
+
+set -euo pipefail
+
+CONFIG="${HOME}/.config/ovhftp/config"
+KEYCHAIN_SERVICE="ovhftp"
+
+# ---------------------------------------------------------------- utilitaires
+
+die() { printf 'Erreur : %s\n' "$1" >&2; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+ovhftp — SFTP OVH simplifié
+
+  ovhftp setup                     enregistre le mot de passe dans le trousseau
+  ovhftp check                     teste la connexion
+  ovhftp ls [DOSSIER]              liste un dossier distant
+  ovhftp tree [DOSSIER]            liste récursivement (peut être long)
+  ovhftp get DISTANT [LOCAL]       télécharge un fichier
+  ovhftp put LOCAL [DISTANT]       envoie un fichier
+  ovhftp pull DOSSIER_DISTANT DOSSIER_LOCAL    copie un dossier vers le Mac
+  ovhftp push DOSSIER_LOCAL DOSSIER_DISTANT    renvoie un dossier vers OVH
+  ovhftp rm DISTANT                supprime un fichier distant
+  ovhftp raw "COMMANDES LFTP"      commandes lftp brutes (avancé)
+
+Les chemins distants sont relatifs à FTP_BASE (voir la config),
+ou absolus s'ils commencent par « / ».
+
+Options d'environnement :
+  DRYRUN=1     pour push/pull : montre ce qui serait fait, sans rien écrire
+USAGE
+}
+
+# ------------------------------------------------------------- configuration
+
+load_config() {
+  [ -f "$CONFIG" ] || die "config absente : $CONFIG (voir le README)"
+  # shellcheck source=/dev/null
+  . "$CONFIG"
+  : "${FTP_HOST:?FTP_HOST manquant dans $CONFIG}"
+  : "${FTP_USER:?FTP_USER manquant dans $CONFIG}"
+  FTP_BASE="${FTP_BASE:-/}"
+}
+
+get_password() {
+  security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$FTP_USER" -w 2>/dev/null \
+    || die "mot de passe introuvable dans le trousseau. Lance : ovhftp setup"
+}
+
+cmd_setup() {
+  load_config
+  printf 'Mot de passe SFTP pour %s@%s : ' "$FTP_USER" "$FTP_HOST"
+  stty -echo; read -r pw; stty echo; printf '\n'
+  [ -n "$pw" ] || die "mot de passe vide"
+  security add-generic-password -U -s "$KEYCHAIN_SERVICE" -a "$FTP_USER" -w "$pw"
+  printf 'Enregistré dans le trousseau macOS.\n'
+}
+
+# ------------------------------------------------------------------ moteur
+
+# Résout un chemin distant : absolu tel quel, sinon relatif à FTP_BASE.
+rpath() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    "") printf '%s' "$FTP_BASE" ;;
+    *)  printf '%s/%s' "${FTP_BASE%/}" "$1" ;;
+  esac
+}
+
+# En mode --dry-run, lftp recopie les commandes qu'il exécuterait, adresse
+# complète comprise — donc le mot de passe en clair. On filtre les deux
+# sorties pour le masquer. Ne pas retirer ce filtre.
+REDACTION='s#(sftps?://[^:@[:space:]]+):[^@[:space:]]*@#\1:***@#g'
+
+lftp_run() {
+  local body="$1" pw
+  pw="$(get_password)"
+  # échappe les guillemets et antislashs pour l'analyseur de lftp
+  pw="${pw//\\/\\\\}"; pw="${pw//\"/\\\"}"
+  command -v lftp >/dev/null 2>&1 || die "lftp absent. Installe-le : brew install lftp"
+  lftp 2> >(sed -E "$REDACTION" >&2) <<EOF | sed -E "$REDACTION"
+set sftp:auto-confirm yes
+set net:max-retries 2
+set net:timeout 20
+set cmd:fail-exit yes
+open -u "${FTP_USER}","${pw}" sftp://${FTP_HOST}
+${body}
+bye
+EOF
+}
+
+# --------------------------------------------------------------- commandes
+
+main() {
+  local action="${1:-}"; shift || true
+
+  case "$action" in
+    ""|-h|--help|help) usage; exit 0 ;;
+    setup) cmd_setup; exit 0 ;;
+  esac
+
+  load_config
+  local mirror_opts=""
+  [ "${DRYRUN:-}" = "1" ] && mirror_opts="--dry-run"
+
+  case "$action" in
+    check)
+      lftp_run "pwd; ls $(rpath '')" >/dev/null \
+        && printf 'Connexion OK : %s@%s\n' "$FTP_USER" "$FTP_HOST"
+      ;;
+    ls)
+      lftp_run "cls -l --sort=name \"$(rpath "${1:-}")\""
+      ;;
+    tree)
+      lftp_run "find \"$(rpath "${1:-}")\""
+      ;;
+    get)
+      [ $# -ge 1 ] || die "usage : ovhftp get DISTANT [LOCAL]"
+      lftp_run "get \"$(rpath "$1")\" -o \"${2:-$(basename "$1")}\""
+      ;;
+    put)
+      [ $# -ge 1 ] || die "usage : ovhftp put LOCAL [DISTANT]"
+      [ -f "$1" ] || die "fichier local introuvable : $1"
+      lftp_run "put \"$1\" -o \"$(rpath "${2:-$(basename "$1")}")\""
+      ;;
+    pull)
+      [ $# -ge 2 ] || die "usage : ovhftp pull DOSSIER_DISTANT DOSSIER_LOCAL"
+      mkdir -p "$2"
+      lftp_run "mirror $mirror_opts --verbose --parallel=4 \"$(rpath "$1")\" \"$2\""
+      ;;
+    push)
+      [ $# -ge 2 ] || die "usage : ovhftp push DOSSIER_LOCAL DOSSIER_DISTANT"
+      [ -d "$1" ] || die "dossier local introuvable : $1"
+      lftp_run "mirror -R $mirror_opts --verbose --parallel=4 \"$1\" \"$(rpath "$2")\""
+      ;;
+    rm)
+      [ $# -ge 1 ] || die "usage : ovhftp rm DISTANT"
+      lftp_run "rm -f \"$(rpath "$1")\""
+      ;;
+    raw)
+      [ $# -ge 1 ] || die "usage : ovhftp raw \"COMMANDES LFTP\""
+      lftp_run "$1"
+      ;;
+    *)
+      die "commande inconnue : $action (ovhftp --help)"
+      ;;
+  esac
+}
+
+main "$@"

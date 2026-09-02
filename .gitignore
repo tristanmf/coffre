@@ -1,0 +1,8 @@
+# Tout ce qui est propre à UNE installation reste hors du dépôt.
+depot/coffre/config.php
+depot/coffre/*.json
+depot/coffre/*.tmp
+depot/coffre/preuves/
+depot/f/*/
+local/
+.DS_Store

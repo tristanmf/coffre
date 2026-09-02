@@ -1,0 +1,77 @@
+#!/bin/bash
+# coffre-preparer — fabrique le fichier de configuration du coffre.
+# À lancer une seule fois, avant le premier envoi sur le serveur.
+# Ni le mot de passe ni la clé ne sont écrits ailleurs que là où il faut.
+
+set -euo pipefail
+
+SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG_MAC="${HOME}/.config/coffre/config"
+ADRESSE_DEFAUT=""
+DISTANT_DEFAUT="www/depot"
+
+command -v php >/dev/null || { echo "PHP est nécessaire (brew install php)." >&2; exit 1; }
+
+printf 'Adresse publique du coffre (ex. https://exemple.fr/depot) : '
+read -r adresse
+adresse="${adresse:-$ADRESSE_DEFAUT}"
+[ -n "$adresse" ] || { echo "Adresse vide, on arrête." >&2; exit 1; }
+adresse="${adresse%/}"
+printf 'Nom affiché aux destinataires (« partagé par … », facultatif) : '
+read -r proprietaire
+printf 'Prénom (« redemande-le à … », facultatif) : '
+read -r prenom
+
+printf 'Dossier distant, relatif à la racine SFTP [%s] : ' "$DISTANT_DEFAUT"
+read -r distant
+distant="${distant:-$DISTANT_DEFAUT}"
+
+printf 'Mot de passe du coffre (celui que tu taperas sur la page) : '
+stty -echo; read -r mdp; stty echo; printf '\n'
+[ -n "$mdp" ] || { echo "Mot de passe vide, on arrête." >&2; exit 1; }
+printf 'Encore une fois : '
+stty -echo; read -r mdp2; stty echo; printf '\n'
+[ "$mdp" = "$mdp2" ] || { echo "Les deux saisies diffèrent." >&2; exit 1; }
+
+cle="$(openssl rand -hex 24)"
+empreinte="$(MDP="$mdp" php -r 'echo password_hash(getenv("MDP"), PASSWORD_DEFAULT);')"
+
+mkdir -p "${SOURCE}/depot/coffre"
+cat > "${SOURCE}/depot/coffre/config.php" <<PHP
+<?php
+/**
+ * Configuration du coffre. Ce fichier ne doit jamais être servi par le web :
+ * le .htaccess de ce dossier l'interdit, et il vit hors de toute sauvegarde publique.
+ */
+return [
+    'adresse'            => '${adresse}',
+    'empreinte_mdp'      => '${empreinte}',
+    'cle_api'            => '${cle}',
+    'expiration_defaut'  => 7,
+    'proprietaire'       => '${proprietaire//\'/\\\'}',
+    'prenom'             => '${prenom//\'/\\\'}',
+];
+PHP
+chmod 600 "${SOURCE}/depot/coffre/config.php"
+
+mkdir -p "$(dirname "$CONFIG_MAC")"
+cat > "$CONFIG_MAC" <<CFG
+COFFRE_URL="${adresse}"
+COFFRE_DISTANT="${distant}"
+CFG
+chmod 600 "$CONFIG_MAC"
+
+security add-generic-password -U -s coffre -a api -w "$cle" 2>/dev/null
+
+unset cle empreinte mdp mdp2
+
+cat <<'FIN_MSG'
+
+C'est prêt.
+
+  · coffre/config.php     écrit en local (il partira sur le serveur avec le reste)
+  · ~/.config/coffre/config  écrit
+  · la clé des commandes du Mac est dans le trousseau (service « coffre »)
+
+Rien de secret n'a été affiché à l'écran, ni écrit dans l'historique du terminal.
+FIN_MSG
