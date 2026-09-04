@@ -5,6 +5,25 @@ $liste = partages();
 usort($liste, fn($a, $b) => strcmp($b['cree'], $a['cree']));
 $total = array_sum(array_column($liste, 'taille'));
 $max = ini_get('upload_max_filesize');
+
+// Deux limites s'appliquent à un envoi par le navigateur : celle du fichier et
+// celle de la requête entière. C'est la plus basse qui commande. On la donne au
+// JavaScript pour qu'il refuse tout de suite, au lieu de laisser partir un envoi
+// que le serveur coupera au bout de plusieurs minutes.
+$octets = static function (string $v): int {
+    $n = (float) trim($v);
+    return (int) match (strtolower(substr(trim($v), -1))) {
+        'g' => $n * 1024 * 1024 * 1024,
+        'm' => $n * 1024 * 1024,
+        'k' => $n * 1024,
+        default => $n,
+    };
+};
+$plafond = $octets((string) $max);
+$plafond_post = $octets((string) ini_get('post_max_size'));
+if ($plafond_post > 0 && $plafond_post < $plafond) {
+    $plafond = $plafond_post;
+}
 ?>
 <h2>Déposer</h2>
 <form method="post" enctype="multipart/form-data">
@@ -87,6 +106,34 @@ $max = ini_get('upload_max_filesize');
 
   var choisis = [];   // { fichier, chemin }
   var csrf = form.querySelector('input[name=csrf]').value;
+  var PLAFOND = <?= $plafond ?>;
+  var PLAFOND_MOT = <?= json_encode(taille_lisible($plafond)) ?>;
+
+  // Un fichier plus lourd que le plafond ne peut pas passer par le navigateur :
+  // autant le dire avant de partir, plutôt que de laisser le serveur couper la
+  // connexion — ce qui donne au navigateur un « TypeError: Load failed » illisible.
+  function tropLourds() {
+    return choisis.filter(function (c) { return c.fichier.size > PLAFOND; });
+  }
+
+  function avertir() {
+    var gros = tropLourds();
+    var boite = document.getElementById('depose-alerte');
+    if (!gros.length) { if (boite) { boite.remove(); } return; }
+    if (!boite) {
+      boite = document.createElement('div');
+      boite.id = 'depose-alerte';
+      boite.className = 'avis erreur';
+      zone.after(boite);
+    }
+    var quoi = gros.length > 1
+      ? gros.length + ' fichiers dépassent ' + PLAFOND_MOT
+      : '\u00ab\u00a0' + gros[0].chemin + '\u00a0\u00bb fait ' + lisible(gros[0].fichier.size) + ', au-del\u00e0 de ' + PLAFOND_MOT;
+    boite.innerHTML = '<strong>Trop lourd pour le navigateur.</strong> ' + quoi +
+      ', la limite d\'un envoi par le web.<br>Passe par la commande <code>partage</code> sur le Mac, ' +
+      'qui n\'a pas de limite : tape <code>partage </code> dans le Terminal, glisse le fichier dans la fen\u00eatre, ' +
+      'puis <code>-j 30</code> pour trente jours.';
+  }
 
   function lisible(o) {
     var u = ['o', 'Ko', 'Mo', 'Go'], i = 0;
@@ -118,6 +165,7 @@ $max = ini_get('upload_max_filesize');
     zone.classList.toggle('rempli', choisis.length > 0);
     mot(choisis.length ? 'Prêt à partir' : 'Glisse tes fichiers ou un dossier ici',
         choisis.length ? '— clique pour changer' : 'ou clique pour les choisir');
+    avertir();
   }
 
   /* ------------------------------------------------ lecture d'un dossier */
@@ -196,6 +244,7 @@ $max = ini_get('upload_max_filesize');
   form.addEventListener('submit', function (e) {
     if (!choisis.length) { return; }          // laisse le navigateur signaler le champ vide
     e.preventDefault();
+    if (tropLourds().length) { montrer(); return; }
     bouton.disabled = true;
 
     var jours = (form.querySelector('input[name=jours]:checked') || {}).value || 7;

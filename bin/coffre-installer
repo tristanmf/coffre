@@ -1,8 +1,8 @@
 #!/bin/bash
 # coffre-installer — installe les commandes du coffre sur un autre Mac.
 #
-# À lancer sur toute machine d'où tu veux envoyer des fichiers et capturer des
-# pages. Le serveur, lui, est déjà en
+# À lancer sur le Mac mini au retour de vacances, ou sur toute machine d'où tu
+# veux envoyer des fichiers et capturer des pages. Le serveur, lui, est déjà en
 # place : il n'y a rien à y refaire.
 #
 # Aucun secret à transporter : on retape simplement le mot de passe du coffre.
@@ -12,7 +12,7 @@ set -euo pipefail
 SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIBLE="${HOME}/.local/bin"
 CONFIG="${HOME}/.config/coffre/config"
-ADRESSE_DEFAUT=""
+ADRESSE_DEFAUT="https://www.egoblog.net/depot"
 DISTANT_DEFAUT="www/depot"
 NAVIGATEUR='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 
@@ -31,7 +31,7 @@ verifier() {
   fi
 }
 echo "Ce qu'il faut sur la machine :"
-verifier ovhftp "ovhftp"   "copie bin/ovhftp dans ~/.local/bin puis lance : ovhftp setup"
+verifier ovhftp "ovhftp"   "installe-le d'abord, le coffre passe par lui"
 verifier lftp   "lftp"     "brew install lftp"
 verifier python3 "python3" "xcode-select --install"
 verifier curl   "curl"     "fourni avec macOS"
@@ -42,13 +42,11 @@ echo
 
 # ---------------------------------------------------------- la configuration
 
-printf 'Adresse publique du coffre (ex. https://exemple.fr/depot) : '
+printf 'Adresse publique du coffre [%s] : ' "$ADRESSE_DEFAUT"
 read -r adresse
 adresse="${adresse:-$ADRESSE_DEFAUT}"
-[ -n "$adresse" ] || { echo "Adresse vide, on arrête." >&2; exit 1; }
-adresse="${adresse%/}"
 
-printf 'Dossier distant, relatif à la racine SFTP [%s] : ' "$DISTANT_DEFAUT"
+printf 'Dossier distant, relatif à /home/egoblog [%s] : ' "$DISTANT_DEFAUT"
 read -r distant
 distant="${distant:-$DISTANT_DEFAUT}"
 
@@ -72,12 +70,8 @@ case "$reponse" in
   *)                 printf 'réponse inattendue.\n'; echo "$reponse" >&2; exit 1 ;;
 esac
 
-# On garde un éventuel dossier de copies locales choisi auparavant.
-local_avant=""
-[ -f "$CONFIG" ] && local_avant="$(sed -n 's/^COFFRE_LOCAL="\(.*\)"$/\1/p' "$CONFIG" | head -1)"
 mkdir -p "$(dirname "$CONFIG")"
 printf 'COFFRE_URL="%s"\nCOFFRE_DISTANT="%s"\n' "$adresse" "$distant" > "$CONFIG"
-[ -n "$local_avant" ] && printf 'COFFRE_LOCAL="%s"\n' "$local_avant" >> "$CONFIG"
 chmod 600 "$CONFIG"
 security add-generic-password -U -s coffre -a api -w "$mdp" 2>/dev/null
 unset mdp
@@ -85,12 +79,26 @@ unset mdp
 # ------------------------------------------------------------- les commandes
 
 mkdir -p "$CIBLE"
-for c in partage preuve coffre-preparer coffre-installer ovhftp; do
+for c in partage preuve coffre-liens coffre-preparer coffre-installer; do
   [ -f "${SOURCE}/${c}" ] || continue
   cp "${SOURCE}/${c}" "${CIBLE}/${c}"
   chmod +x "${CIBLE}/${c}"
   printf '  installé : %s\n' "$c"
 done
+
+# ------------------------------------------- le clic droit dans le Finder (macOS)
+
+QA="Partager par le coffre.workflow"
+if [ -d "${SOURCE}/../macos/${QA}" ] && [ "$(uname)" = "Darwin" ]; then
+  mkdir -p "${HOME}/Library/Services" "${HOME}/Scripts"
+  rm -rf "${HOME}/Library/Services/${QA}"
+  cp -R "${SOURCE}/../macos/${QA}" "${HOME}/Library/Services/"
+  # Le raccourci pointe vers le script du dépôt : une mise à jour du dépôt suffit.
+  ln -sf "${SOURCE}/coffre-clic-droit.sh" "${HOME}/Scripts/coffre-clic-droit.sh"
+  chmod +x "${SOURCE}/coffre-clic-droit.sh" 2>/dev/null || true
+  /System/Library/CoreServices/pbs -flush 2>/dev/null || true
+  printf '  installé : clic droit « Partager par le coffre » dans le Finder\n'
+fi
 
 case ":$PATH:" in
   *":${CIBLE}:"*) ;;
@@ -103,6 +111,12 @@ cat <<'FIN_MSG'
 C'est prêt. Essaie :
 
   partage un-fichier.pdf
+  coffre-liens                    la liste des partages en cours et leurs liens
   preuve https://exemple.fr/une-page
+
+Dans le Finder, clic droit sur un fichier → Actions rapides →
+« Partager par le coffre ». Au premier lancement, macOS demandera l'accès au
+trousseau : répondre « Toujours autoriser ». Si l'entrée n'apparaît pas encore,
+relancer le Finder.
 
 FIN_MSG

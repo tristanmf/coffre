@@ -43,7 +43,9 @@ if (!$valable) {
     }
 }
 
-$base = 'f/' . rawurlencode((string) ($p['jeton'] ?? ''));
+// Adresse ABSOLUE, et non relative : la page est servie à /depot/d/JETON, donc
+// un « f/… » relatif serait résolu en /depot/d/f/… et renverrait une 404.
+$base = rtrim((string) config()['adresse'], '/') . '/f/' . rawurlencode((string) ($p['jeton'] ?? ''));
 $qui = (string) (config()['proprietaire'] ?? '');
 $prenom = (string) (config()['prenom'] ?? '');
 ?>

@@ -96,9 +96,23 @@ if ($quoi === 'partage') {
     if ($jeton === '' || !is_file($chemin)) {
         repondre(404, ['erreur' => 'fichier absent du serveur — le transfert SFTP a-t-il abouti ?']);
     }
-    $sha = hash_file('sha256', $chemin);
-    if (!empty($in['sha256']) && !hash_equals($sha, (string) $in['sha256'])) {
-        repondre(409, ['erreur' => 'le fichier reçu ne correspond pas à celui envoyé', 'sha256_serveur' => $sha]);
+    // Relire le fichier pour en refaire l'empreinte coûte environ une minute par
+    // gigaoctet sur le mutualisé : au-delà du seuil, PHP n'a pas le temps de finir
+    // et l'appel meurt alors que le fichier est bien arrivé. On vérifie donc la
+    // taille, et on retient l'empreinte calculée sur le Mac — même arbitrage que
+    // pour la branche « groupe » ci-dessus.
+    $taille = filesize($chemin);
+    $verifiee = $taille <= 512 * 1024 * 1024;
+    if ($verifiee) {
+        $sha = hash_file('sha256', $chemin);
+        if (!empty($in['sha256']) && !hash_equals($sha, (string) $in['sha256'])) {
+            repondre(409, ['erreur' => 'le fichier reçu ne correspond pas à celui envoyé', 'sha256_serveur' => $sha]);
+        }
+    } else {
+        if (!empty($in['taille']) && (int) $in['taille'] !== $taille) {
+            repondre(409, ['erreur' => 'le fichier reçu est incomplet', 'attendue' => (int) $in['taille'], 'recue' => $taille]);
+        }
+        $sha = preg_match('/^[0-9a-f]{64}$/', (string) ($in['sha256'] ?? '')) ? (string) $in['sha256'] : '';
     }
     $jours = max(1, min(365, (int) ($in['jours'] ?? $cfg['expiration_defaut'])));
     $p = partages();
@@ -106,7 +120,7 @@ if ($quoi === 'partage') {
         'jeton'    => $jeton,
         'type'     => 'fichier',
         'nom'      => $nom,
-        'taille'   => filesize($chemin),
+        'taille'   => $taille,
         'sha256'   => $sha,
         'note'     => trim((string) ($in['note'] ?? '')),
         'cree'     => date('c'),
@@ -115,7 +129,7 @@ if ($quoi === 'partage') {
         'origine'  => 'mac',
     ];
     partages_ecrire($p);
-    repondre(200, ['lien' => lien_partage($jeton), 'expire' => date('c', time() + $jours * 86400), 'sha256' => $sha]);
+    repondre(200, ['lien' => lien_partage($jeton), 'expire' => date('c', time() + $jours * 86400), 'sha256' => $sha, 'verifiee' => $verifiee, 'taille' => $taille]);
 }
 
 /* -------------------------------------------------- inscription d'une pièce */

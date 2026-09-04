@@ -1,0 +1,71 @@
+#!/bin/bash
+# coffre-liens — la liste des partages en cours, avec leur lien.
+#
+#   coffre-liens         la liste
+#   coffre-liens -c      copie le lien du plus récent dans le presse-papier
+#
+# Sert quand la notification est passée inaperçue (mode Concentration), quand le
+# presse-papier a été écrasé, ou depuis l'autre Mac. Le registre du serveur fait
+# foi : ce qui est listé ici est exactement ce qui répond aux destinataires.
+
+set -euo pipefail
+
+CONFIG="${HOME}/.config/coffre/config"
+[ -f "$CONFIG" ] || { echo "Configuration absente. Lance d'abord coffre-installer." >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$CONFIG"
+: "${COFFRE_URL:?COFFRE_URL manquant}" "${COFFRE_DISTANT:?COFFRE_DISTANT manquant}"
+
+copier=0
+case "${1:-}" in
+  -c|--copier) copier=1 ;;
+  -h|--help)   sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+# lftp refuse d'écrire sur un fichier qui existe déjà : on lui donne un dossier
+# vide et un nom neuf, pas le fichier que fabriquerait mktemp.
+dossier="$(mktemp -d)"
+trap 'rm -rf "$dossier"' EXIT
+tmp="${dossier}/partages.json"
+ovhftp get "${COFFRE_DISTANT}/coffre/partages.json" "$tmp" >/dev/null 2>&1 \
+  || { echo "Impossible de lire le registre du coffre." >&2; exit 1; }
+
+URL="$COFFRE_URL" COPIER="$copier" python3 - "$tmp" <<'PY'
+import json, os, sys, datetime, subprocess
+
+url = os.environ["URL"].rstrip("/")
+copier = os.environ["COPIER"] == "1"
+entrees = json.load(open(sys.argv[1]))
+if not entrees:
+    print("Aucun partage en cours.")
+    raise SystemExit(0)
+
+def lisible(o):
+    u = ["o", "Ko", "Mo", "Go"]
+    i = 0
+    while o >= 1024 and i < 3:
+        o /= 1024
+        i += 1
+    return (f"{o:.1f}" if i else f"{o}") + " " + u[i]
+
+entrees.sort(key=lambda e: e["cree"], reverse=True)
+print(f"{len(entrees)} partage(s) en cours :\n")
+liens = []
+for e in entrees:
+    exp = datetime.datetime.fromisoformat(e["expire"])
+    reste = (exp - datetime.datetime.now(exp.tzinfo)).days
+    lien = f"{url}/d/{e['jeton']}"
+    liens.append(lien)
+    n = int(e.get("retraits", 0))
+    print(f"  {e['nom']}")
+    print(f"    {lisible(e['taille'])} · encore {max(reste, 0)} jour(s) · "
+          f"{n} retrait{'s' if n > 1 else ''}")
+    print(f"    {lien}")
+    if e.get("note"):
+        print(f"    note : {e['note']}")
+    print()
+
+if copier:
+    subprocess.run(["pbcopy"], input=liens[0].encode())
+    print("Le lien du plus récent est dans le presse-papier.")
+PY

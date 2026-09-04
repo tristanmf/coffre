@@ -83,11 +83,12 @@ if [ "${#cibles[@]}" -eq 1 ] && [ -f "${cibles[0]}" ]; then
   printf 'Envoi de %s (%s)…\n' "$nom" "$(lisible "$taille")"
   ovhftp raw "mkdir -f -p \"${distant}\"; put \"${fichier}\" -o \"${distant}/${nom}\""
 
-  corps="$(CLE="$cle" JETON="$jeton" NOM="$nom" SHA="$sha" JOURS="$jours" NOTE="$note" python3 -c '
+  corps="$(CLE="$cle" JETON="$jeton" NOM="$nom" SHA="$sha" TAILLE="$taille" JOURS="$jours" NOTE="$note" python3 -c '
 import json, os
 print(json.dumps({"cle": os.environ["CLE"], "quoi": "partage", "type": "fichier",
                   "jeton": os.environ["JETON"], "nom": os.environ["NOM"],
-                  "sha256": os.environ["SHA"], "jours": int(os.environ["JOURS"]),
+                  "sha256": os.environ["SHA"], "taille": int(os.environ["TAILLE"]),
+                  "jours": int(os.environ["JOURS"]),
                   "note": os.environ["NOTE"]}))')"
 
 # ------------------------------------------- un dossier, ou plusieurs cibles
@@ -131,8 +132,18 @@ fi
 # ------------------------------------------------- inscription au catalogue
 
 # Les trois règles du pare-feu OVH : un vrai User-Agent, du JSON, un corps non vide.
-reponse="$(printf '%s' "$corps" | curl -sS -X POST "${COFFRE_URL}/api.php" \
-  -H 'Content-Type: application/json' -H 'Expect:' -A "$NAVIGATEUR" --data-binary @-)"
+# Deux tentatives : sur un gros fichier le serveur met du temps à répondre, et la
+# première peut être coupée alors que le fichier, lui, est bien arrivé.
+appeler() {
+  printf '%s' "$corps" | curl -sS --max-time 900 -X POST "${COFFRE_URL}/api.php" \
+    -H 'Content-Type: application/json' -H 'Expect:' -A "$NAVIGATEUR" --data-binary @-
+}
+reponse="$(appeler || true)"
+case "$reponse" in
+  *'"lien"'*) ;;
+  *) printf 'Le serveur n%st%spas répondu du premier coup. Nouvelle tentative…\n' "'" "'" >&2
+     sleep 5; reponse="$(appeler || true)" ;;
+esac
 unset cle corps
 
 lien="$(REP="$reponse" python3 -c '
@@ -145,7 +156,21 @@ if "lien" in d:
     print(d["lien"])
 else:
     sys.stderr.write("Le serveur a refusé : " + str(d.get("erreur", d)) + "\n"); sys.exit(1)
-')" || { echo "Les fichiers sont sur le serveur mais ne sont pas inscrits au catalogue." >&2; exit 1; }
+')" || {
+  echo "Les fichiers sont sur le serveur mais ne sont pas inscrits au catalogue." >&2
+  echo "Rien n'est perdu : le transfert a abouti, seule l'inscription a manqué." >&2
+  echo "Jeton du dépôt : ${jeton}" >&2
+  exit 1
+}
 
 printf '\n%s\n' "$lien"
-printf '%s\n' "$lien" | pbcopy 2>/dev/null && printf '(copié dans le presse-papier, valable %s jours)\n' "$jours"
+[ "$jours" -gt 1 ] && motjours="$jours jours" || motjours="1 jour"
+printf '%s\n' "$lien" | pbcopy 2>/dev/null && printf '(copié dans le presse-papier, valable %s)\n' "$motjours"
+
+# Un envoi de plusieurs gigaoctets dure de longues minutes : on prévient, pour ne
+# pas avoir à surveiller le Terminal. Indispensable au raccourci du clic droit.
+osascript - "$nom" "$motjours" <<'AS' >/dev/null 2>&1 || true
+on run argv
+  display notification ("Lien copié dans le presse-papier, valable " & item 2 of argv & ".") with title "Le coffre" subtitle (item 1 of argv) sound name "Glass"
+end run
+AS

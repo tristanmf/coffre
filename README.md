@@ -26,10 +26,13 @@ Créé par **[Tristan Mendès France](https://tristan.pro)**, qui travaille sur 
 ```bash
 partage ~/Movies/rushes.mp4 -j 30 -n "montage de mardi"
 partage ~/Movies/Tunisie/                 # un dossier entier, sous-dossiers compris
+coffre-liens                              # les partages en cours, avec leur lien
 preuve https://exemple.fr/le-post -n "narratif repris par X le 19 août"
 ```
 
-`partage` envoie en SFTP (aucune limite de taille, transfert reprenable), affiche le lien et le copie dans le presse-papier. `preuve` capture la page avec Chrome (image, PDF de la page entière, code HTML, en-têtes du serveur), empreinte chaque pièce, envoie le tout et l'inscrit au registre. Une copie de chaque pièce reste sur le Mac, dans `~/.local/share/coffre` (ou le dossier indiqué par `COFFRE_LOCAL=` dans `~/.config/coffre/config`).
+**Dans le Finder**, un clic droit : *Actions rapides → Partager par le coffre*. Une fenêtre demande la durée, l'envoi part en arrière-plan, et une notification prévient quand le lien est prêt — il est alors déjà dans le presse-papier. Installé par `bin/coffre-installer` sur macOS.
+
+`partage` envoie en SFTP (aucune limite de taille, transfert reprenable), affiche le lien, le copie dans le presse-papier et le signale par une notification macOS. `coffre-liens` relit le registre du serveur : c'est le filet quand un lien s'est perdu. `preuve` capture la page avec Chrome (image, PDF de la page entière, code HTML, en-têtes du serveur), empreinte chaque pièce, envoie le tout et l'inscrit au registre. Une copie de chaque pièce reste sur le Mac, dans `~/.local/share/coffre` (ou le dossier indiqué par `COFFRE_LOCAL=` dans `~/.config/coffre/config`).
 
 **Depuis le navigateur**, une page d'administration sous mot de passe : on y dépose des fichiers ou un dossier par glisser-déposer, on choisit la durée de vie (2 jours à 1 an), on obtient le lien. On y consulte le conservatoire, on y cherche, on y vérifie que chaque pièce correspond encore à ses empreintes.
 
@@ -51,7 +54,7 @@ cd coffre
 1. **L'accès SFTP.** Copier `bin/ovhftp` dans `~/.local/bin`, créer `~/.config/ovhftp/config` avec trois lignes (`FTP_HOST=…`, `FTP_USER=…`, `FTP_BASE=/chemin/racine`), puis `ovhftp setup` : le mot de passe part dans le trousseau macOS, jamais sur le disque. Malgré son nom, `ovhftp` parle à n'importe quel serveur SFTP.
 2. **La configuration du coffre.** `bin/coffre-preparer` demande l'adresse publique du coffre, le dossier distant, un mot de passe (tapé deux fois, sans écho), et fabrique `depot/coffre/config.php` avec l'empreinte bcrypt du mot de passe et une clé tirée au hasard. Rien de secret n'est affiché ni écrit dans l'historique.
 3. **L'envoi sur le serveur.** `ovhftp push depot www/depot` (adapter le dossier distant). Puis vérifier dans un navigateur que `https://votre-adresse/depot/coffre/` renvoie bien **403** : si ce n'est pas le cas, le serveur ignore les `.htaccess`, et il ne faut pas aller plus loin.
-4. **Les commandes.** `bin/coffre-installer` les copie dans `~/.local/bin`, vérifie le mot de passe auprès du serveur et le range dans le trousseau. Sur un second Mac, seule cette étape est nécessaire : aucun secret à transporter, on retape simplement le mot de passe.
+4. **Les commandes.** `bin/coffre-installer` les copie dans `~/.local/bin`, vérifie le mot de passe auprès du serveur et le range dans le trousseau, et installe l'Action rapide du clic droit dans le Finder. Sur un second Mac, seule cette étape est nécessaire : aucun secret à transporter, on retape simplement le mot de passe. Au premier envoi, macOS demande l'accès au trousseau : répondre « Toujours autoriser ».
 
 ## Ce qu'il faut savoir avant de s'en servir
 
