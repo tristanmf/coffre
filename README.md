@@ -51,10 +51,10 @@ git clone https://github.com/tristanmf/coffre.git
 cd coffre
 ```
 
-1. **L'accès SFTP.** Copier `bin/ovhftp` dans `~/.local/bin`, créer `~/.config/ovhftp/config` avec trois lignes (`FTP_HOST=…`, `FTP_USER=…`, `FTP_BASE=/chemin/racine`), puis `ovhftp setup` : le mot de passe part dans le trousseau macOS, jamais sur le disque. Malgré son nom, `ovhftp` parle à n'importe quel serveur SFTP.
+1. **L'accès SFTP.** Sur la première machine : copier `bin/ovhftp` dans `~/.local/bin`, créer `~/.config/ovhftp/config` avec trois lignes (`FTP_HOST=…`, `FTP_USER=…`, `FTP_BASE=/chemin/racine`), puis `ovhftp setup` : le mot de passe part dans le trousseau macOS, jamais sur le disque. Malgré son nom, `ovhftp` parle à n'importe quel serveur SFTP. Sur les suivantes, `bin/coffre-installer` s'en charge tout seul (étape 4).
 2. **La configuration du coffre.** `bin/coffre-preparer` demande l'adresse publique du coffre, le dossier distant, un mot de passe (tapé deux fois, sans écho), et fabrique `depot/coffre/config.php` avec l'empreinte bcrypt du mot de passe et une clé tirée au hasard. Rien de secret n'est affiché ni écrit dans l'historique.
 3. **L'envoi sur le serveur.** `ovhftp push depot www/depot` (adapter le dossier distant). Puis vérifier dans un navigateur que `https://votre-adresse/depot/coffre/` renvoie bien **403** : si ce n'est pas le cas, le serveur ignore les `.htaccess`, et il ne faut pas aller plus loin.
-4. **Les commandes.** `bin/coffre-installer` les copie dans `~/.local/bin`, vérifie le mot de passe auprès du serveur et le range dans le trousseau, et installe l'Action rapide du clic droit dans le Finder. Sur un second Mac, seule cette étape est nécessaire : aucun secret à transporter, on retape simplement le mot de passe. Au premier envoi, macOS demande l'accès au trousseau : répondre « Toujours autoriser ».
+4. **Les commandes.** `bin/coffre-installer` les copie dans `~/.local/bin`, vérifie le mot de passe auprès du serveur et le range dans le trousseau, configure l'accès SFTP s'il manque, et installe l'Action rapide du clic droit dans le Finder. **Deux secrets sont en jeu, à ne pas confondre** : le mot de passe de la page (le catalogue) et celui du SFTP (le transfert lui-même). Oublier le second donne un « login incorrect » au premier envoi, alors que le coffre répond parfaitement. Sur un second Mac, seule cette étape est nécessaire : aucun secret à transporter, on retape simplement le mot de passe. Au premier envoi, macOS demande l'accès au trousseau : répondre « Toujours autoriser ».
 
 ## Ce qu'il faut savoir avant de s'en servir
 

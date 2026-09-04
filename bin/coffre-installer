@@ -19,6 +19,16 @@ NAVIGATEUR='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 echo "Installation du coffre sur cette machine."
 echo
 
+# ovhftp est livré avec le coffre : on le pose s'il manque, au lieu de s'arrêter.
+mkdir -p "$CIBLE"
+if ! command -v ovhftp >/dev/null 2>&1 && [ -f "${SOURCE}/ovhftp" ]; then
+  cp "${SOURCE}/ovhftp" "${CIBLE}/ovhftp"
+  chmod +x "${CIBLE}/ovhftp"
+  export PATH="${CIBLE}:${PATH}"
+  echo "  installé : ovhftp"
+  echo
+fi
+
 # ------------------------------------------------------------- l'outillage
 
 manque=0
@@ -75,6 +85,45 @@ printf 'COFFRE_URL="%s"\nCOFFRE_DISTANT="%s"\n' "$adresse" "$distant" > "$CONFIG
 chmod 600 "$CONFIG"
 security add-generic-password -U -s coffre -a api -w "$mdp" 2>/dev/null
 unset mdp
+
+# ------------------------------------------------- l'accès SFTP (second secret)
+
+# Le mot de passe de la page ne suffit pas : le transfert lui-même passe en SFTP,
+# avec ses propres identifiants et son propre trousseau. Oublier cette étape
+# donne un « login incorrect » au premier envoi, alors que le coffre répond très
+# bien — c'est le piège rencontré en installant le coffre sur un second Mac.
+
+OVHCONF="${HOME}/.config/ovhftp/config"
+if [ ! -f "$OVHCONF" ]; then
+  echo
+  echo "L'accès SFTP n'est pas encore configuré sur cette machine."
+  printf '  Serveur SFTP (ex. ftp.clusterNNN.hosting.ovh.net) : '
+  read -r fhost
+  printf '  Identifiant SFTP : '
+  read -r fuser
+  if [ -n "$fhost" ] && [ -n "$fuser" ]; then
+    printf '  Racine distante [/home/%s] : ' "$fuser"
+    read -r fbase
+    fbase="${fbase:-/home/$fuser}"
+    mkdir -p "$(dirname "$OVHCONF")"
+    printf 'FTP_HOST=%s\nFTP_USER=%s\nFTP_BASE=%s\n' "$fhost" "$fuser" "$fbase" > "$OVHCONF"
+    chmod 600 "$OVHCONF"
+    printf '  écrit : %s\n' "$OVHCONF"
+  else
+    echo "  ignoré — à configurer avant le premier envoi." >&2
+  fi
+fi
+
+if [ -f "$OVHCONF" ]; then
+  printf "Vérification de l'accès SFTP… "
+  if ovhftp ls . >/dev/null 2>&1; then
+    printf 'bon.\n'
+  else
+    printf 'mot de passe à enregistrer.\n'
+    ovhftp setup \
+      || echo "  Sans l'accès SFTP, partage ne peut rien envoyer. À reprendre." >&2
+  fi
+fi
 
 # ------------------------------------------------------------- les commandes
 
