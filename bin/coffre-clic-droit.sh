@@ -56,8 +56,21 @@ else
 fi
 notifier "$quoi" "Envoi en cours…"
 
-# partage copie le lien dans le presse-papier et notifie lui-même en cas de succès.
+# partage copie le lien dans le presse-papier et notifie lui-même. Mais une
+# notification se rate — mode Concentration, écran secondaire, tête ailleurs.
+# On montre donc aussi une fenêtre, qui attend. Le lien y est écrit en clair :
+# même si le presse-papier a été écrasé entre-temps, il reste lisible.
 if sortie="$(partage "$@" -j "$jours" 2>&1)"; then
+  lien="$(printf '%s' "$sortie" | grep -oE 'https?://[^[:space:]]+' | tail -1)"
+  osascript - "$quoi" "${lien:-(lien introuvable — voir coffre-liens)}" <<'AS' >/dev/null 2>&1 || true
+on run argv
+  display dialog ("C'est en ligne : " & (item 1 of argv) & return & return ¬
+    & "Le lien est déjà dans le presse-papier, prêt à coller." & return & return ¬
+    & (item 2 of argv)) ¬
+    with title "Le coffre" buttons {"OK"} default button "OK" with icon note ¬
+    giving up after 600
+end run
+AS
   exit 0
 fi
 
