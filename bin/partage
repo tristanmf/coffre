@@ -81,7 +81,25 @@ if [ "${#cibles[@]}" -eq 1 ] && [ -f "${cibles[0]}" ]; then
   printf 'faite.\n'
 
   printf 'Envoi de %s (%s)…\n' "$nom" "$(lisible "$taille")"
-  ovhftp raw "mkdir -f -p \"${distant}\"; put \"${fichier}\" -o \"${distant}/${nom}\""
+
+  envoyer() {
+    ovhftp raw "mkdir -f -p \"${distant}\"; put \"$1\" -o \"${distant}/${nom}\""
+  }
+
+  # Certains fichiers refusent de se laisser lire directement par lftp, sans que
+  # rien ne soit abîmé : marque-place d'un service de synchronisation (iCloud,
+  # Drive) pas encore rapatrié, antivirus qui s'interpose, fichier encore en cours
+  # d'écriture. Symptôme observé : « Resource deadlock avoided ». Une copie dans un
+  # dossier neutre lève tous ces cas d'un coup — on ne la fait qu'en cas d'échec.
+  if ! envoyer "$fichier"; then
+    printf 'Lecture directe impossible. Nouvelle tentative depuis une copie…\n' >&2
+    abri="$(mktemp -d)"
+    trap 'rm -rf "$abri"' EXIT
+    cp "$fichier" "${abri}/${nom}" \
+      || { echo "Copie impossible : le fichier est illisible." >&2; exit 1; }
+    envoyer "${abri}/${nom}" \
+      || { echo "Envoi impossible, même depuis une copie." >&2; exit 1; }
+  fi
 
   corps="$(CLE="$cle" JETON="$jeton" NOM="$nom" SHA="$sha" TAILLE="$taille" JOURS="$jours" NOTE="$note" python3 -c '
 import json, os
